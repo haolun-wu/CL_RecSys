@@ -68,18 +68,18 @@ def compute_metrics(test_set, pred_list, topk=20):
     return precision, recall, MAP, ndcg
 
 
-def dict_extend(dict1, dict2):
+def dict_extend(dict1, dict2):  # extend the original dict with new real_ids
     merged_dict = dict1.copy()
-    count = list(dict1.values())[-1]
+    index = list(dict1.values())[-1]
     for key, values in dict2.items():
         if key not in dict1:
-            merged_dict[key] = count + 1
-            count += 1
+            merged_dict[key] = index + 1
+            index += 1
     return merged_dict
 
 
 def separete_intersect_dicts(dict1, dict2):
-    # return common_key:value in dict1, common_key:value in dict2, rest in dict2
+    # return {common_real_id:index} in dict1, {common_real_id:index} in dict2, rest in dict2
     in_dict1, in_dict2, rest_dict2 = {}, {}, {}
     for key, values in dict2.items():
         if key in dict1:
@@ -97,3 +97,15 @@ def update_emb_table(emb_cum, emb_curr, dict_inter_prev, dict_inter, dict_rest):
         emb_cum[list(dict_inter_prev.values())] = emb_curr[list(dict_inter.values())]
         emb_cum = torch.cat((emb_cum, emb_curr[list(dict_rest.values())]), 0)
     return emb_cum
+
+
+def index_B_in_A(A, B):
+    sort_idx = A.argsort()
+    return sort_idx[np.searchsorted(A, B, sorter=sort_idx)]
+
+
+if __name__ == '__main__':
+    A = np.array([1, 3, 7, 34, 21, 6])
+    B = np.array([3, 21, 6])
+
+    print(index_B_in_A(A, B))

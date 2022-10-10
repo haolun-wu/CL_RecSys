@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from helper.utils import index_B_in_A
 
 import time
 
@@ -21,13 +22,18 @@ class MatrixFactorization(nn.Module):
         self.num_items = num_items
         self.dim = args.dim
         self.batch_size = args.batch_size
+        self.time_block = time_block
+
+        self.user_emb_cum, self.item_emb_cum = user_emb_cum, item_emb_cum
+        self.user_dict_inter_prev, self.user_dict_inter = user_dict_inter_prev, user_dict_inter
+        self.item_dict_inter_prev, self.item_dict_inter = item_dict_inter_prev, item_dict_inter
 
         self.user_embeddings = nn.Embedding(self.num_users, args.dim).to(self.device)
         self.item_embeddings = nn.Embedding(self.num_items, args.dim).to(self.device)
         self.user_embeddings.weight.data = torch.nn.init.xavier_uniform_(self.user_embeddings.weight.data)
         self.item_embeddings.weight.data = torch.nn.init.xavier_uniform_(self.item_embeddings.weight.data)
 
-        if time_block > 0:
+        if time_block > 0:  # use previous occurred emb for initialization
             self.user_embeddings.weight.data[list(user_dict_inter.values())] = user_emb_cum[
                 list(user_dict_inter_prev.values())]
             self.item_embeddings.weight.data[list(item_dict_inter.values())] = item_emb_cum[
@@ -44,9 +50,25 @@ class MatrixFactorization(nn.Module):
         tmp = pos_scores - neg_scores
 
         bpr_loss = -nn.LogSigmoid()(tmp)
-        # mf_loss = -torch.sum(maxi)
 
         return bpr_loss
+
+    def self_emb_distill(self, index_list, emb_curr, emb_cum, dict_inter, dict_inter_prev):
+        common_values = np.intersect1d(list(set(index_list)), list(dict_inter.values()))
+        if len(common_values) != 0:
+            # the position of common users
+            position_in_all = index_B_in_A(np.array(list(dict_inter.values())), common_values)
+            position_in_batch = index_B_in_A(np.array(list(set(index_list))), common_values)
+
+            common_keys = np.array(list(dict_inter.keys()))[position_in_all]
+            common_values_prev = np.array([dict_inter_prev[x] for x in common_keys])
+
+            distill_loss = emb_curr[position_in_batch] - emb_cum[common_values_prev]
+            distill_loss = torch.sqrt(torch.square(distill_loss).sum())
+        else:
+            distill_loss = 0
+
+        return distill_loss
 
     def forward(self, user, pos, neg):
         user_id = torch.from_numpy(user).type(torch.LongTensor).to(self.device)
@@ -60,6 +82,54 @@ class MatrixFactorization(nn.Module):
         batch_loss = torch.sum(self.bpr_loss(user_emb, pos_emb, neg_emb))
 
         return batch_loss
+
+    def forward_self_emb_distill(self, user, pos, neg):
+        user_id = torch.from_numpy(user).type(torch.LongTensor).to(self.device)  # value in dict
+        pos_id = torch.from_numpy(pos).type(torch.LongTensor).to(self.device)
+        neg_id = torch.from_numpy(neg).type(torch.LongTensor).to(self.device)
+
+        user_emb = self.user_embeddings(user_id)
+        pos_emb = self.item_embeddings(pos_id)
+        neg_emb = self.item_embeddings(neg_id)
+
+        distill_user_loss = self.self_emb_distill(user, user_emb, self.user_emb_cum, self.user_dict_inter,
+                                                  self.user_dict_inter_prev)
+        distill_pos_loss = self.self_emb_distill(pos, pos_emb, self.item_emb_cum, self.item_dict_inter,
+                                                 self.item_dict_inter_prev)
+        distill_neg_loss = self.self_emb_distill(neg, neg_emb, self.item_emb_cum, self.item_dict_inter,
+                                                 self.item_dict_inter_prev)
+
+        # # self_emb for users
+        # common_user_values = np.intersect1d(user, list(self.user_dict_inter.values()))
+        # if len(common_user_values) != 0:
+        #     common_user_keys = list(self.user_dict_inter.keys())[common_user_values]
+        #     common_user_values_prev = np.array([self.user_dict_inter_prev[x] for x in common_user_keys])
+        #     distill_user_loss = user_emb[common_user_values] - self.user_emb_cum[common_user_values_prev]
+        # else:
+        #     distill_user_loss = 0
+        #
+        # # self_emb for pos
+        # common_pos_values = np.intersect1d(pos, list(self.item_dict_inter.values()))
+        # common_pos_keys = list(self.item_dict_inter.keys())[common_pos_values]
+        # common_pos_values_prev = np.array([self.item_dict_inter_prev[x] for x in common_pos_keys])
+        # distill_pos_loss = pos_emb[common_pos_values] - self.item_emb_cum[common_pos_values_prev]
+        #
+        # # self_emb for neg
+        # common_neg_values = np.intersect1d(neg, list(self.item_dict_inter.values()))
+        # common_neg_keys = list(self.item_dict_inter.keys())[common_neg_values]
+        # common_neg_values_prev = np.array([self.item_dict_inter_prev[x] for x in common_neg_keys])
+        # distill_neg_loss = pos_emb[common_neg_values] - self.item_emb_cum[common_neg_values_prev]
+
+        batch_loss = torch.sum(self.bpr_loss(user_emb, pos_emb, neg_emb)) + 1.0 * (
+                distill_user_loss + distill_pos_loss + distill_neg_loss)
+
+        return batch_loss
+
+    #
+    #
+    #
+    # def distill_self_emb(self, user_emb_cum, user_dict_inter_prev, user_dict_inter, item_emb_cum, item_dict_inter_prev,
+    #                      item_dict_inter):
 
     def predict(self, user_id):
         user_emb = self.user_embeddings(user_id)

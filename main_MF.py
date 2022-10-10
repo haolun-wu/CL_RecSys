@@ -84,7 +84,8 @@ def train_model_block(args, time_block=0):
                 batch_user_id, batch_item_id, neg_samples = sampler.next_batch()
                 user, pos, neg = batch_user_id, batch_item_id, np.squeeze(neg_samples)
 
-                batch_loss = model(user, pos, neg)
+                # batch_loss = model(user, pos, neg)
+                batch_loss = model.forward_self_emb_distill(user, pos, neg)
 
                 optimizer.zero_grad()
                 batch_loss.backward()
@@ -146,7 +147,8 @@ if __name__ == '__main__':
 
     print("Data name:", args.data_name)
     # data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
-    data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
+    # data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
+    data_dir = "C:/Users/31093/Documents/GitHub/CL_RecSys/data/"
     if args.data_name == 'lastfm':
         data_generator = read_data_lastfm_time.Data(data_dir, test_ratio=args.test_ratio,
                                                     val_ratio=args.val_ratio, user_filter=args.user_filter,
@@ -167,7 +169,7 @@ if __name__ == '__main__':
     for i in range(4):
         print("--------------------")
         print("Data Block:{}".format(i))
-        # update appeared nodes for Train
+        # update appeared nodes for Train. all dict: {real_id: index}
         user_dict_cum_prev, item_dict_cum_prev = user_dict_cum_ext, item_dict_cum_ext
         user_dict, item_dict = data_generator.data_full_dict[i][0], data_generator.data_full_dict[i][1]
         user_dict_cum_ext = dict_extend(user_dict_cum_ext, user_dict) if user_dict_cum_ext != {} else user_dict
@@ -188,8 +190,9 @@ if __name__ == '__main__':
             # args.every = 1
             # args.n_epochs = 10
             train_matrix = data_generator.data_full_dict[i][2] + data_generator.data_full_dict[i][3]
-            # only use the test_set and val_set on those users in train_matrix
             test_set, val_set = data_generator.data_full_dict[i + 1][6], data_generator.data_full_dict[i + 1][5]
+
+            # only use the test_set and val_set on those users in train_matrix
             user_dict_curr = data_generator.data_full_dict[i][0]
             user_dict_next = data_generator.data_full_dict[i + 1][0]
             # print("train:", train_matrix.shape[0])
@@ -223,6 +226,11 @@ if __name__ == '__main__':
                                         user_dict_rest)
         item_emb_cum = update_emb_table(item_emb_cum, item_emb_curr, item_dict_inter_prev, item_dict_inter,
                                         item_dict_rest)
+        # print("prev-key:", list(user_dict_inter_prev.keys())[:5])
+        # print("prev-value:", list(user_dict_inter_prev.values())[:5])
+        # print("curr-key:", list(user_dict_inter.keys())[:5])
+        print("curr-value:", list(user_dict_inter.values())[:5])
+
         print("user_emb_curr:", user_emb_curr.shape)
         print("item_emb_curr:", item_emb_curr.shape)
         print("user_emb_cum:", user_emb_cum.shape)
