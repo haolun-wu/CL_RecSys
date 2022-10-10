@@ -1,0 +1,99 @@
+from helper.sampler import negsamp_vectorized_bsearch_preverif
+from helper.eval_metrics import precision_at_k, recall_at_k, mapk, ndcg_k
+import torch
+import numpy as np
+
+
+def neg_item_pre_sampling(train_matrix, num_neg_candidates=500):
+    num_users, num_items = train_matrix.shape
+    user_neg_items = []
+    for user_id in range(num_users):
+        pos_items = train_matrix[user_id].indices
+
+        u_neg_item = negsamp_vectorized_bsearch_preverif(pos_items, num_items, num_neg_candidates)
+        user_neg_items.append(u_neg_item)
+
+    user_neg_items = np.asarray(user_neg_items)
+
+    return user_neg_items
+
+
+def generate_pred_list(model, train_matrix, device, topk=20):
+    num_users = train_matrix.shape[0]
+    batch_size = 1024
+    num_batches = int(num_users / batch_size) + 1
+    user_indexes = np.arange(num_users)
+    pred_list = None
+
+    for batchID in range(num_batches):
+        start = batchID * batch_size
+        end = start + batch_size
+
+        if batchID == num_batches - 1:
+            if start < num_users:
+                end = num_users
+            else:
+                break
+
+        batch_user_index = user_indexes[start:end]
+        batch_user_ids = torch.from_numpy(np.array(batch_user_index)).type(torch.LongTensor).to(device)
+
+        rating_pred = model.predict(batch_user_ids)
+        rating_pred = rating_pred.cpu().data.numpy().copy()
+        rating_pred[train_matrix[batch_user_index].toarray() > 0] = 0
+
+        # reference: https://stackoverflow.com/a/23734295, https://stackoverflow.com/a/20104162
+        ind = np.argpartition(rating_pred, -topk)
+        ind = ind[:, -topk:]
+        arr_ind = rating_pred[np.arange(len(rating_pred))[:, None], ind]
+        arr_ind_argsort = np.argsort(arr_ind)[np.arange(len(rating_pred)), ::-1]
+        batch_pred_list = ind[np.arange(len(rating_pred))[:, None], arr_ind_argsort]
+
+        if batchID == 0:
+            pred_list = batch_pred_list
+        else:
+            pred_list = np.append(pred_list, batch_pred_list, axis=0)
+
+    return pred_list
+
+
+def compute_metrics(test_set, pred_list, topk=20):
+    precision, recall, MAP, ndcg = [], [], [], []
+    for k in [5, 10, 15, 20]:
+        precision.append(round(precision_at_k(test_set, pred_list, k), 6))
+        recall.append(round(recall_at_k(test_set, pred_list, k), 6))
+        MAP.append(round(mapk(test_set, pred_list, k), 6))
+        ndcg.append(round(ndcg_k(test_set, pred_list, k), 6))
+
+    return precision, recall, MAP, ndcg
+
+
+def dict_extend(dict1, dict2):
+    merged_dict = dict1.copy()
+    count = list(dict1.values())[-1]
+    for key, values in dict2.items():
+        if key not in dict1:
+            merged_dict[key] = count + 1
+            count += 1
+    return merged_dict
+
+
+def separete_intersect_dicts(dict1, dict2):
+    # return common_key:value in dict1, common_key:value in dict2, rest in dict2
+    in_dict1, in_dict2, rest_dict2 = {}, {}, {}
+    for key, values in dict2.items():
+        if key in dict1:
+            in_dict1[key] = dict1[key]
+            in_dict2[key] = dict2[key]
+        else:
+            rest_dict2[key] = dict2[key]
+    return in_dict1, in_dict2, rest_dict2
+
+
+def update_emb_table(emb_cum, emb_curr, dict_inter_prev, dict_inter, dict_rest):
+    if emb_cum == None:
+        emb_cum = emb_curr
+    else:
+        emb_cum[list(dict_inter_prev.values())] = emb_curr[list(dict_inter.values())]
+        emb_cum = torch.cat((emb_cum, emb_curr[list(dict_rest.values())]), 0)
+    return emb_cum

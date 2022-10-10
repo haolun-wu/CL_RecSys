@@ -85,6 +85,7 @@ class Data(object):
 
             print('all_user:{}, all_item:{}, all_interac:{}'.format(self.num_user, self.num_item, self.num_interac))
         else:
+            df = pandas.read_csv(pro_data_path)
             print('all_user:{}, all_item:{}, all_interac:{}'.format(1892, 12523, 87061))
 
         if not os.path.exists(pro_data_block_path):
@@ -106,13 +107,34 @@ class Data(object):
             data_3 = pandas.read_csv(os.path.join(data_dir, "preprocessed/hetrec-lastfm/data_3.csv"))
             data_4 = pandas.read_csv(os.path.join(data_dir, "preprocessed/hetrec-lastfm/data_4.csv"))
 
-        self.user_dict, self.item_dict, self.train_matrix, self.test_matrix, self.val_matrix, \
-        self.train_set, self.test_set, self.val_set = [], [], [], [], [], [], [], []
-        self.preprocess_data_block(data_0)
-        self.preprocess_data_block(data_1)
-        self.preprocess_data_block(data_2)
-        self.preprocess_data_block(data_3)
-        self.preprocess_data_block(data_4)
+        data_full = [data_0, data_1, data_2, data_3, data_4]
+        # self.user_dict, self.item_dict, self.train_matrix, self.test_matrix, self.val_matrix, \
+        # self.train_set, self.test_set, self.val_set = [], [], [], [], [], [], [], []
+        # self.preprocess_data_block(data_0)
+        # self.preprocess_data_block(data_1)
+        # self.preprocess_data_block(data_2)
+        # self.preprocess_data_block(data_3)
+        # self.preprocess_data_block(data_4)
+
+        self.data_full_dict = {}
+        for i in range(len(data_full)):
+            print("------------")
+            print("Block:{}".format(i))
+            self.data_full_dict[i] = self.preprocess_data_block(data_full[i], time_block=i)
+
+        user0 = set(list(self.data_full_dict[0][0].keys()))
+        user1 = set(list(self.data_full_dict[1][0].keys()))
+        user2 = set(list(self.data_full_dict[2][0].keys()))
+        user3 = set(list(self.data_full_dict[3][0].keys()))
+        user4 = set(list(self.data_full_dict[4][0].keys()))
+
+        # print("original:", len(list(set(user0) & set(user1))))
+        #
+        # print("common:", len(list(set(user0) & set(user1))))
+        # print("common:", len(list(set(user1) & set(user2))))
+        # print("common:", len(list(set(user2) & set(user3))))
+        # print("common:", len(list(set(user3) & set(user4))))
+        # self.plot_statistics(user0, user1, user2, user3, user4)
 
         # print("U-I:")
         # print(np.sum([len(x) for x in self.train_set_UI]),
@@ -127,32 +149,116 @@ class Data(object):
         # avg_deg *= 1 / (1 - test_ratio)
         # print('Avg. degree U-I graph: ', avg_deg)
 
-    def preprocess_data_block(self, data_block):
+    def preprocess_data_block(self, data_block, time_block):
         data_block = data_block[["user", "item", "rate"]].drop_duplicates()
-        data_block = self.remove_infrequent_users(data_block, self.user_filter)
+        if time_block == 0:
+            user_filter, item_filter = 5, 5
+        else:
+            user_filter, item_filter = 3, 5
+        data_block = self.remove_infrequent_users(data_block, user_filter)
+        data_block = self.remove_infrequent_items(data_block, item_filter)
+        data_block = self.remove_infrequent_users(data_block, user_filter)
         data_block, user_dict = self.convert_unique_idx(data_block, "user")
         data_block, item_dict = self.convert_unique_idx(data_block, "item")
-        print("# user:{}, # item:{}, # interact:{}".format(data_block['user'].max() + 1,
-                                                           data_block['item'].max() + 1, data_block.shape[0]))
+        num_user = data_block['user'].max() + 1
+        num_item = data_block['item'].max() + 1
+        print("# user:{}, # item:{}, # interact:{}".format(num_user, num_item, data_block.shape[0]))
         UI_matrix = scipy.sparse.csr_matrix(
             (np.array(data_block['rate']), (np.array(data_block['user']), np.array(data_block['item']))))
 
-        if self.val_ratio:
-            self.val_ratio = self.val_ratio / (1 - self.test_ratio)
+        if time_block == 0:
+            if self.val_ratio:
+                self.val_ratio = self.val_ratio / (1 - self.test_ratio)
+        else:
+            # if self.val_ratio:
+            #     self.val_ratio = self.val_ratio / (1 - self.test_ratio)
+            self.val_ratio = 0
+            self.test_ratio = 0.5
 
         train_matrix, test_matrix, val_matrix, train_set, test_set, val_set \
             = self.create_train_test_split(UI_matrix, test_ratio=self.test_ratio, val_ratio=self.val_ratio, seed=0)
 
-        self.user_dict.append(user_dict)
-        self.item_dict.append(item_dict)
-        self.train_matrix.append(train_matrix)
-        self.test_matrix.append(test_matrix)
-        self.val_matrix.append(val_matrix)
-        self.train_set.append(train_set)
-        self.test_set.append(test_set)
-        self.val_set.append(val_set)
+        print("# train:{}, # val:{}, # test:{}".format(np.sum([len(x) for x in train_set]),
+                                                       np.sum([len(x) for x in val_set]),
+                                                       np.sum([len(x) for x in test_set])))
+        density = float(
+            np.sum([len(x) for x in train_set]) + np.sum([len(x) for x in val_set]) + np.sum(
+                [len(x) for x in test_set])) / num_user / num_item
+        print("density:{:.2%}".format(density))
+        #
+        # avg_deg = np.sum([len(x) for x in self.train_set_UI]) / self.num_user
+        # avg_deg *= 1 / (1 - test_ratio)
+        # print('Avg. degree U-I graph: ', avg_deg)
+        # self.user_dict.append(user_dict)
+        # self.item_dict.append(item_dict)
+        # self.train_matrix.append(train_matrix)
+        # self.test_matrix.append(test_matrix)
+        # self.val_matrix.append(val_matrix)
+        # self.train_set.append(train_set)
+        # self.test_set.append(test_set)
+        # self.val_set.append(val_set)
 
-        # return user_dict, item_dict, train_matrix, test_matrix, val_matrix, train_set, test_set, val_set
+        return user_dict, item_dict, train_matrix, test_matrix, val_matrix, train_set, test_set, val_set
+
+    def plot_statistics(self, set0, set1, set2, set3, set4):
+        import pandas as pd
+        import seaborn as sns
+        import numpy as np
+        sns.set(font_scale=1.8)
+
+        import matplotlib.pyplot as plt
+
+        plt.rcParams["figure.figsize"] = (10, 10)
+        import matplotlib.gridspec as gridspec
+        #
+        gs = gridspec.GridSpec(1, 8)
+        ax1 = plt.subplot(gs[0, :8])
+
+        # fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 7))
+        legend_size = 15
+        font_size = 20
+        title_size = 28
+
+        df1 = pd.DataFrame([
+            ["new to all", "block0", len(set0)],
+            ["new to last", "block0", len(set0)],
+            ["number", "block0", len(set0)],
+            ["new to all", "block1", len(set1 - set0)],
+            ["new to last", "block1", len(set1 - set0)],
+            ["number", "block1", len(set1)],
+            ["new to all", "block2", len(set2 - (set0 | set1))],
+            ["new to last", "block2", len(set2 - set1)],
+            ["number", "block2", len(set2)],
+            ["new to all", "block3", len(set3 - (set0 | set1 | set2))],
+            ["new to last", "block3", len(set3 - set2)],
+            ["number", "block3", len(set3)],
+            ["new to all", "block4", len(set4 - (set0 | set1 & set2 | set3))],
+            ["new to last", "block4", len(set4 - set3)],
+            ["number", "block4", len(set4)],
+        ])
+        x_label = ["block0", "block1", "block2", "block3", "block4"]
+
+        df1.columns = ['Model', '', 'Relative Performance']
+
+        graph1 = sns.barplot(ax=ax1, data=df1, x='', y='Relative Performance', hue='Model')
+        graph1.axhline(1, color='r', linestyle='--')
+
+        ax1.legend(loc=(0.03, 1.01), fontsize=legend_size, ncol=3)
+        # ax1.set_ylim(0.8, 1.1)
+
+        ax1.set_xticks(np.arange(6))
+        ax1.set_xticklabels(x_label, rotation=60, fontsize=font_size)
+
+        # ax1.set_title("(a) HetRec-Del", fontsize=title_size, y=-0.1, pad=-90, fontweight="bold",
+        #               fontname="Times New Roman")
+
+        plt.tight_layout()
+        # plt.subplots_adjust(wspace=0.5, hspace=0.7)
+        # plt.savefig('./fig_pdf/ISA.pdf', bbox_inches='tight')
+
+        plt.show()
+        plt.close()
+        plt.clf()
 
     def generate_inverse_mapping(self, data_list):
         ds_matrix_mapping = dict()
@@ -270,7 +376,7 @@ class Data(object):
         counts = df['item'].value_counts()
         df = df[df['item'].isin(counts[counts >= min_counts].index)]
 
-        print("items with < {} interactoins are removed".format(min_counts))
+        # print("items with < {} interactoins are removed".format(min_counts))
         # print(df.describe())
         return df
 
@@ -279,7 +385,7 @@ class Data(object):
         counts = df['user'].value_counts()
         df = df[df['user'].isin(counts[counts >= min_counts].index)]
 
-        print("users with < {} interactoins are removed".format(min_counts))
+        # print("users with < {} interactoins are removed".format(min_counts))
         # print(df.describe())
         return df
 
@@ -312,6 +418,7 @@ def parser_args():
 
 if __name__ == '__main__':
     parser = parser_args()
-    data_dir = '../data/hetrec-lastfm/user_taggedartists-timestamps.dat'
+    # data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
+    data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
     data_generator = Data(data_dir, test_ratio=parser.test_ratio, val_ratio=parser.val_ratio,
                           user_filter=parser.user_filter, item_filter=parser.item_filter)
