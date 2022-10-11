@@ -23,6 +23,7 @@ class MatrixFactorization(nn.Module):
         self.dim = args.dim
         self.batch_size = args.batch_size
         self.time_block = time_block
+        self.scaling_self_emb = args.scaling_self_emb
 
         self.user_emb_cum, self.item_emb_cum = user_emb_cum, item_emb_cum
         self.user_dict_inter_prev, self.user_dict_inter = user_dict_inter_prev, user_dict_inter
@@ -101,28 +102,7 @@ class MatrixFactorization(nn.Module):
         distill_neg_loss = self.self_emb_distill(neg, neg_emb, self.item_emb_cum, self.item_dict_inter,
                                                  self.item_dict_inter_prev)
 
-        # # self_emb for users
-        # common_user_values = np.intersect1d(user, list(self.user_dict_inter.values()))
-        # if len(common_user_values) != 0:
-        #     common_user_keys = list(self.user_dict_inter.keys())[common_user_values]
-        #     common_user_values_prev = np.array([self.user_dict_inter_prev[x] for x in common_user_keys])
-        #     distill_user_loss = user_emb[common_user_values] - self.user_emb_cum[common_user_values_prev]
-        # else:
-        #     distill_user_loss = 0
-        #
-        # # self_emb for pos
-        # common_pos_values = np.intersect1d(pos, list(self.item_dict_inter.values()))
-        # common_pos_keys = list(self.item_dict_inter.keys())[common_pos_values]
-        # common_pos_values_prev = np.array([self.item_dict_inter_prev[x] for x in common_pos_keys])
-        # distill_pos_loss = pos_emb[common_pos_values] - self.item_emb_cum[common_pos_values_prev]
-        #
-        # # self_emb for neg
-        # common_neg_values = np.intersect1d(neg, list(self.item_dict_inter.values()))
-        # common_neg_keys = list(self.item_dict_inter.keys())[common_neg_values]
-        # common_neg_values_prev = np.array([self.item_dict_inter_prev[x] for x in common_neg_keys])
-        # distill_neg_loss = pos_emb[common_neg_values] - self.item_emb_cum[common_neg_values_prev]
-
-        batch_loss = torch.sum(self.bpr_loss(user_emb, pos_emb, neg_emb)) + 1.0 * (
+        batch_loss = torch.sum(self.bpr_loss(user_emb, pos_emb, neg_emb)) + self.scaling_self_emb * (
                 distill_user_loss + distill_pos_loss + distill_neg_loss)
 
         return batch_loss

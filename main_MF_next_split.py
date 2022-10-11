@@ -26,7 +26,7 @@ torch.backends.cudnn.benchmark = True
 
 def parse_args():
     parser = ArgumentParser(description="MF")
-    parser.add_argument("--data_name", type=str, default="LF")
+    parser.add_argument("--data_name", type=str, default="lastfm")
     parser.add_argument('--test_ratio', type=float, default=0.1)
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
@@ -148,11 +148,11 @@ if __name__ == '__main__':
     data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
     # data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
     # data_dir = "C:/Users/31093/Documents/GitHub/CL_RecSys/data/"
-    if args.data_name == 'LF':
+    if args.data_name == 'lastfm':
         data_generator = read_data_lastfm_time.Data(data_dir, test_ratio=args.test_ratio,
                                                     val_ratio=args.val_ratio, user_filter=args.user_filter,
                                                     item_filter=args.item_filter, seed=args.seed)
-    elif args.data_name == 'ML':
+    elif args.data_name == 'ml1m':
         data_generator = read_data_ML.Data(data_dir, test_ratio=args.test_ratio,
                                            val_ratio=args.val_ratio, user_filter=args.user_filter,
                                            item_filter=args.item_filter, seed=args.seed)
