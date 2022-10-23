@@ -192,7 +192,7 @@ if __name__ == '__main__':
     print(args)
 
     print("Data name:", args.data_name)
-    data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
+    data_dir = "./data/"
     # data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
     # data_dir = "C:/Users/31093/Documents/GitHub/CL_RecSys/data/"
     if args.data_name == 'lastfm':
