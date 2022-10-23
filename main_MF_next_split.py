@@ -8,11 +8,13 @@ import logging
 import numpy as np
 import torch
 import time
+import pickle
 
 from helper.sampler import NegSampler
 from helper.utils import neg_item_pre_sampling, generate_pred_list, compute_metrics, dict_extend, \
-    separete_intersect_dicts, update_emb_table
+    separete_intersect_dicts, update_emb_table, EarlyStopping
 from helper.next_split import read_data_LF, read_data_ML
+from helper.eval_metrics import recall_at_k_list
 from argparse import ArgumentParser
 from model.MF_time import MatrixFactorization
 
@@ -31,8 +33,11 @@ def parse_args():
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
     parser.add_argument('--item_filter', type=int, default=5)
-    parser.add_argument('--gpu_id', type=int, default=2)
+    parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--is_logging', type=bool, default=False)
+    parser.add_argument('--strategy', type=str, default='self-emb', choices=['fine', 'self-emb', 'ewc'])
+    # self-emb
+    parser.add_argument('--scaling_self_emb', type=float, default=50.0)
     # neighborhood to use
     parser.add_argument('--n_neg', type=int, default=1, help='the number of negative samples')
     # Seed
@@ -43,12 +48,13 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
     parser.add_argument('--wd', type=float, default=1e-3, help="Weight decay factor")
     # Training
-    parser.add_argument('--n_epochs', type=int, default=50, help="Number of epoch during training")
-    parser.add_argument('--every', type=int, default=10,
+    parser.add_argument('--n_epochs', type=int, default=100, help="Number of epoch during training")
+    parser.add_argument('--every', type=int, default=5,
                         help="Period for evaluating precision and recall during training")
+    parser.add_argument('--patience', type=int, default=5, help="patience")
     parser.add_argument('--batch_size', type=int, default=256, help="batch_size")
     parser.add_argument('--topk', type=int, default=20, help="topk")
-    parser.add_argument('--sample_every', type=int, default=50, help="sample frequency")
+    parser.add_argument('--sample_every', type=int, default=10, help="sample frequency")
 
     return parser.parse_args()
 
@@ -70,12 +76,17 @@ def train_model_block(args, time_block=0):
     sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg, n_workers=4)
     num_batches = train_matrix.count_nonzero() // args.batch_size
 
+    saved_model_path = './saved/{}/model/next/state-{}.pt'.format(args.data_name, args.strategy)
+    saved_result_path = './saved/{}/result/next/'.format(args.data_name)
+    early_stopping = EarlyStopping(patience=args.patience, verbose=True, path=saved_model_path)
+
     try:
         for iter in range(1, args.n_epochs + 1):
             start = time.time()
             model.train()
 
             loss = 0.
+            aux_loss = 0.
 
             # Start Training
             for batch_id in range(num_batches):
@@ -83,36 +94,49 @@ def train_model_block(args, time_block=0):
                 batch_user_id, batch_item_id, neg_samples = sampler.next_batch()
                 user, pos, neg = batch_user_id, batch_item_id, np.squeeze(neg_samples)
 
-                # batch_loss = model(user, pos, neg)
-                batch_loss = model.forward_self_emb_distill(user, pos, neg)
+                if args.strategy == 'fine':
+                    train_loss = model(user, pos, neg)
+                    batch_loss = train_loss
+                elif args.strategy == 'self-emb':
+                    train_loss, self_loss = model.forward_self_emb_distill(user, pos, neg)
+                    batch_loss = train_loss + args.scaling_self_emb * self_loss
 
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
 
-                loss += batch_loss.item()
+                loss += train_loss.item()
+                try:
+                    aux_loss += self_loss.item()
+                except:
+                    pass
 
             # logger.info("Epochs:{}".format(iter))
-            # logger.info('[{:.2f}s] Avg BPR loss:{:.6f}'.format(time.time() - start, loss / num_batches))
+
             # print(model.myparameters[0].grad.sum())
             # print(model.myparameters[1].grad.sum())
 
             if iter % args.every == 0:
-                logger.info("Epochs:{}".format(iter))
+                logger.info('Avg BPR loss:{:.6f}'.format(loss / num_batches))
+                logger.info('Avg aux loss:{:.6f}'.format(aux_loss / num_batches))
+                # logger.info("Epochs:{}".format(iter))
                 model.eval()
                 pred_list = generate_pred_list(model, train_matrix, device=args.device, topk=20)
                 if time_block > 0:
                     pred_list = [pred_list[i] for i in list(user_common_curr_id.values())]
-                if args.val_ratio > 0.0:
-                    logger.info("validation")
-                    precision, recall, MAP, ndcg = compute_metrics(val_set, pred_list, topk=20)
-                    logger.info(', '.join(str(e) for e in recall))
-                    logger.info(', '.join(str(e) for e in ndcg))
 
-                logger.info("test")
-                precision, recall, MAP, ndcg = compute_metrics(test_set, pred_list, topk=20)
-                logger.info(', '.join(str(e) for e in recall))
-                logger.info(', '.join(str(e) for e in ndcg))
+                # logger.info("validation")
+                precision, recall, MAP, ndcg = compute_metrics(val_set, pred_list, topk=20)
+                # logger.info(', '.join(str(e) for e in recall))
+                # logger.info(', '.join(str(e) for e in ndcg))
+
+                # early_stopping
+                early_stopping(recall[-1], model)
+
+                if early_stopping.early_stop:
+                    print("Early stopping")
+
+                    break
 
             if iter % args.sample_every == 0:
                 user_neg_items = neg_item_pre_sampling(train_matrix, num_neg_candidates=500)
@@ -124,6 +148,28 @@ def train_model_block(args, time_block=0):
     except KeyboardInterrupt:
         sampler.close()
         sys.exit()
+
+    model.load_state_dict(torch.load(saved_model_path))
+    print("Test Item recommendation:")
+    pred_list = generate_pred_list(model, train_matrix, device=args.device, topk=20)
+    if time_block > 0:
+        pred_list = [pred_list[i] for i in list(user_common_curr_id.values())]
+    precision, recall, MAP, ndcg = compute_metrics(test_set, pred_list, topk=20)
+    logger.info(', '.join(str(e) for e in recall))
+    logger.info(', '.join(str(e) for e in ndcg))
+
+    # save individual recall
+    if time_block == 0:
+        keys = list(user_dict.keys())
+    else:
+        keys = list(user_common_next_id.keys())
+    values = recall_at_k_list(test_set, pred_list, topk=20)
+    individual_recall = {k: v for k, v in zip(keys, values)}
+    with open('./saved/{}/result/next/recall-{}-block-{}.pkl'.format(args.data_name, args.strategy, i), 'wb') as f:
+        pickle.dump(individual_recall, f)
+
+    # with open('saved_dictionary.pkl', 'rb') as f:
+    #     loaded_dict = pickle.load(f)
 
     # logger.info('Parameters:')
     # for arg, value in sorted(vars(args).items()):
@@ -137,6 +183,7 @@ if __name__ == '__main__':
     args = parse_args()
     args.device = torch.device('cuda:' + str(args.gpu_id) if torch.cuda.is_available() else 'cpu')
     print("device:", args.device)
+    print("strategy:", args.strategy)
     if args.is_logging is True:
         handler = logging.FileHandler('./log/' + args.data + '.log')
         handler.setLevel(logging.INFO)
@@ -149,9 +196,9 @@ if __name__ == '__main__':
     # data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
     # data_dir = "C:/Users/31093/Documents/GitHub/CL_RecSys/data/"
     if args.data_name == 'lastfm':
-        data_generator = read_data_lastfm_time.Data(data_dir, test_ratio=args.test_ratio,
-                                                    val_ratio=args.val_ratio, user_filter=args.user_filter,
-                                                    item_filter=args.item_filter, seed=args.seed)
+        data_generator = read_data_LF.Data(data_dir, test_ratio=args.test_ratio,
+                                           val_ratio=args.val_ratio, user_filter=args.user_filter,
+                                           item_filter=args.item_filter, seed=args.seed)
     elif args.data_name == 'ml1m':
         data_generator = read_data_ML.Data(data_dir, test_ratio=args.test_ratio,
                                            val_ratio=args.val_ratio, user_filter=args.user_filter,
@@ -162,6 +209,8 @@ if __name__ == '__main__':
     user_emb_cum, item_emb_cum = None, None
 
     for i in range(4):
+        # if i > 0:
+        #     args.every = 1
         print("--------------------")
         print("Data Block:{}".format(i))
         # update appeared nodes for Train. all dict: {real_id: index}
@@ -214,6 +263,7 @@ if __name__ == '__main__':
         test_set, val_set = np.array(test_set, dtype=list), np.array(val_set, dtype=list)
         user_size, item_size = train_matrix.shape[0], train_matrix.shape[1]
         print("user_size:{}, item_size:{}".format(user_size, item_size))
+        print("common users for test:{}".format(len(test_set)))
 
         # Train model and update embedding table
         user_emb_curr, item_emb_curr = train_model_block(args, time_block=i)
@@ -221,10 +271,6 @@ if __name__ == '__main__':
                                         user_dict_rest)
         item_emb_cum = update_emb_table(item_emb_cum, item_emb_curr, item_dict_inter_prev, item_dict_inter,
                                         item_dict_rest)
-        # print("prev-key:", list(user_dict_inter_prev.keys())[:5])
-        # print("prev-value:", list(user_dict_inter_prev.values())[:5])
-        # print("curr-key:", list(user_dict_inter.keys())[:5])
-        print("curr-value:", list(user_dict_inter.values())[:5])
 
         print("user_emb_curr:", user_emb_curr.shape)
         print("item_emb_curr:", item_emb_curr.shape)

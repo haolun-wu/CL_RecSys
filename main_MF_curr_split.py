@@ -28,16 +28,16 @@ torch.backends.cudnn.benchmark = True
 
 def parse_args():
     parser = ArgumentParser(description="MF")
-    parser.add_argument("--data_name", type=str, default="ml1m")
+    parser.add_argument("--data_name", type=str, default="lastfm")
     parser.add_argument('--test_ratio', type=float, default=0.1)
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
     parser.add_argument('--item_filter', type=int, default=5)
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--is_logging', type=bool, default=False)
-    parser.add_argument('--strategy', type=str, default='pure', choices=['pure', 'self-emb', 'ewc', 'ader'])
+    parser.add_argument('--strategy', type=str, default='self-emb', choices=['pure', 'self-emb', 'ewc', 'ader'])
     # self-emb
-    parser.add_argument('--scaling_self_emb', type=float, default=1.0)
+    parser.add_argument('--scaling_self_emb', type=float, default=20.0)
     # neighborhood to use
     parser.add_argument('--n_neg', type=int, default=1, help='the number of negative samples')
     # Seed
@@ -48,12 +48,12 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
     parser.add_argument('--wd', type=float, default=1e-3, help="Weight decay factor")
     # Training
-    parser.add_argument('--n_epochs', type=int, default=50, help="Number of epoch during training")
+    parser.add_argument('--n_epochs', type=int, default=100, help="Number of epoch during training")
     parser.add_argument('--every', type=int, default=5,
                         help="Period for evaluating precision and recall during training")
     parser.add_argument('--patience', type=int, default=5, help="patience")
     parser.add_argument('--batch_size', type=int, default=256, help="batch_size")
-    parser.add_argument('--topk', type=int, default=10, help="topk")
+    parser.add_argument('--topk', type=int, default=20, help="topk")
     parser.add_argument('--sample_every', type=int, default=10, help="sample frequency")
 
     return parser.parse_args()
@@ -76,8 +76,8 @@ def train_model_block(args, time_block=0):
     sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg, n_workers=4)
     num_batches = train_matrix.count_nonzero() // args.batch_size
 
-    saved_model_path = './saved/{}/model/state-{}.pt'.format(args.data_name, args.strategy)
-    saved_result_path = './saved/{}/result/'.format(args.data_name)
+    saved_model_path = './saved/{}/model/curr/state-{}.pt'.format(args.data_name, args.strategy)
+    saved_result_path = './saved/{}/result/curr/'.format(args.data_name)
     early_stopping = EarlyStopping(patience=args.patience, verbose=True, path=saved_model_path)
 
     try:
@@ -86,6 +86,7 @@ def train_model_block(args, time_block=0):
             model.train()
 
             loss = 0.
+            aux_loss = 0.
 
             # Start Training
             for batch_id in range(num_batches):
@@ -94,22 +95,30 @@ def train_model_block(args, time_block=0):
                 user, pos, neg = batch_user_id, batch_item_id, np.squeeze(neg_samples)
 
                 if args.strategy == 'pure':
-                    batch_loss = model(user, pos, neg)
+                    train_loss = model(user, pos, neg)
+                    batch_loss = train_loss
                 elif args.strategy == 'self-emb':
-                    batch_loss = model.forward_self_emb_distill(user, pos, neg)
+                    train_loss, self_loss = model.forward_self_emb_distill(user, pos, neg)
+                    batch_loss = train_loss + args.scaling_self_emb * self_loss
 
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
 
-                loss += batch_loss.item()
+                loss += train_loss.item()
+                try:
+                    aux_loss += self_loss.item()
+                except:
+                    pass
 
             # logger.info("Epochs:{}".format(iter))
-            # logger.info('[{:.2f}s] Avg BPR loss:{:.6f}'.format(time.time() - start, loss / num_batches))
+
             # print(model.myparameters[0].grad.sum())
             # print(model.myparameters[1].grad.sum())
 
             if iter % args.every == 0:
+                logger.info('Avg BPR loss:{:.6f}'.format(loss / num_batches))
+                logger.info('Avg aux loss:{:.6f}'.format(aux_loss / num_batches))
                 # logger.info("Epochs:{}".format(iter))
                 model.eval()
                 pred_list = generate_pred_list(model, train_matrix, device=args.device, topk=20)
@@ -153,7 +162,7 @@ def train_model_block(args, time_block=0):
     keys = list(user_common_next_id.keys())
     values = recall_at_k_list(test_set, pred_list, topk=20)
     individual_recall = {k: v for k, v in zip(keys, values)}
-    with open('./saved/{}/result/recall-{}-block-{}.pkl'.format(args.data_name, args.strategy, i), 'wb') as f:
+    with open('./saved/{}/result/curr/recall-{}-block-{}.pkl'.format(args.data_name, args.strategy, i), 'wb') as f:
         pickle.dump(individual_recall, f)
 
     # with open('saved_dictionary.pkl', 'rb') as f:

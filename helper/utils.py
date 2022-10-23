@@ -100,8 +100,17 @@ def update_emb_table(emb_cum, emb_curr, dict_inter_prev, dict_inter, dict_rest):
 
 
 def index_B_in_A(A, B):
+    if not isinstance(A, (np.ndarray, np.generic)):
+        A = np.array(A)
     sort_idx = A.argsort()
     return sort_idx[np.searchsorted(A, B, sorter=sort_idx)]
+
+
+def select_by_order_B_in_A(A, B):  # A=[3,2,4,7,6], B=[2,6,7], return [2,7,6]
+    if not isinstance(A, list):
+        A = A.tolist()
+
+    return [x for _, x in sorted(zip([A.index(x) for x in B], B))]
 
 
 class EarlyStopping:
@@ -164,7 +173,9 @@ class EarlyStopping:
 
 
 if __name__ == '__main__':
-    A = np.array([1, 3, 7, 34, 21, 6])
+    A = np.array([1, 3, 7, 6, 21, 66])
+    # A = np.array([3, 6, 21])
     B = np.array([3, 21, 6])
 
     print(index_B_in_A(A, B))
+    print(select_by_order(A, B))

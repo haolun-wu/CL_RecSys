@@ -99,13 +99,13 @@ class MatrixFactorization(nn.Module):
                                                   self.user_dict_inter_prev)
         distill_pos_loss = self.self_emb_distill(pos, pos_emb, self.item_emb_cum, self.item_dict_inter,
                                                  self.item_dict_inter_prev)
-        distill_neg_loss = self.self_emb_distill(neg, neg_emb, self.item_emb_cum, self.item_dict_inter,
-                                                 self.item_dict_inter_prev)
+        # distill_neg_loss = self.self_emb_distill(neg, neg_emb, self.item_emb_cum, self.item_dict_inter,
+        #                                          self.item_dict_inter_prev)
 
-        batch_loss = torch.sum(self.bpr_loss(user_emb, pos_emb, neg_emb)) + self.scaling_self_emb * (
-                distill_user_loss + distill_pos_loss + distill_neg_loss)
+        train_loss = torch.sum(self.bpr_loss(user_emb, pos_emb, neg_emb))
+        self_loss = distill_user_loss + distill_pos_loss
 
-        return batch_loss
+        return train_loss, self_loss
 
     #
     #
