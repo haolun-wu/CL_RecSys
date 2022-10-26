@@ -28,7 +28,7 @@ torch.backends.cudnn.benchmark = True
 
 def parse_args():
     parser = ArgumentParser(description="MF")
-    parser.add_argument("--data_name", type=str, default="lastfm")
+    parser.add_argument("--data_name", type=str, default="ml1m")
     parser.add_argument('--test_ratio', type=float, default=0.1)
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
@@ -196,10 +196,10 @@ if __name__ == '__main__':
         data_generator = read_data_LF.Data(data_dir, test_ratio=args.test_ratio,
                                            val_ratio=args.val_ratio, user_filter=args.user_filter,
                                            item_filter=args.item_filter, seed=args.seed)
-    elif args.data_name == 'ml1m':
-        data_generator = read_data_ML.Data(data_dir, test_ratio=args.test_ratio,
+    elif 'ml' in args.data_name:
+        data_generator = read_data_ML.Data(data_dir, data_name=args.data_name, test_ratio=args.test_ratio,
                                            val_ratio=args.val_ratio, user_filter=args.user_filter,
-                                           item_filter=args.item_filter, seed=args.seed)
+                                           item_filter=args.item_filter, exact_time=True, seed=args.seed)
     # record appeared nodes
     user_dict_cum_prev, item_dict_cum_prev = {}, {}
     user_dict_cum_ext, item_dict_cum_ext = {}, {}
