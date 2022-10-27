@@ -108,9 +108,9 @@ class Data(object):
             print('all_user:{}, all_item:{}, all_interac:{}'.format(statistics[0], statistics[1], statistics[2]))
 
         if exact_time:
-            data_full = self.preprocess_data_exact_time(df, data_name, pro_data_block_path)
+            data_full = self.preprocess_data_exact_time(df, data_dir, data_name, pro_data_block_path)
         else:
-            data_full = self.preprocess_data_not_exact_time(df, data_name, pro_data_block_path)
+            data_full = self.preprocess_data_not_exact_time(df, data_dir, data_name, pro_data_block_path)
 
         self.data_full_dict = {}
         length = len(data_full)
@@ -122,7 +122,7 @@ class Data(object):
             user_now = list(self.data_full_dict[i][0].keys())
             print("block {}-{}, #common users:{}".format(i - 1, i, len(list(set(user_prev) & set(user_now)))))
 
-    def preprocess_data_exact_time(self, df, data_name, pro_data_block_path):
+    def preprocess_data_exact_time(self, df, data_dir, data_name, pro_data_block_path):
 
         if not os.path.exists(pro_data_block_path):
             data_full = []
@@ -154,7 +154,7 @@ class Data(object):
 
         return data_full
 
-    def preprocess_data_not_exact_time(self, df, data_name, pro_data_block_path):
+    def preprocess_data_not_exact_time(self, df, data_dir, data_name, pro_data_block_path):
         if not os.path.exists(pro_data_block_path):
             if data_name == 'ml-1m':
                 num_interact = 575281

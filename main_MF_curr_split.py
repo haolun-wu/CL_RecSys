@@ -28,7 +28,7 @@ torch.backends.cudnn.benchmark = True
 
 def parse_args():
     parser = ArgumentParser(description="MF")
-    parser.add_argument("--data_name", type=str, default="ml1m")
+    parser.add_argument("--data_name", type=str, default="ml-1m")
     parser.add_argument('--test_ratio', type=float, default=0.1)
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
@@ -189,7 +189,7 @@ if __name__ == '__main__':
     print(args)
 
     print("Data name:", args.data_name)
-    data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
+    data_dir = "./data/"
     # data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
     # data_dir = "C:/Users/31093/Documents/GitHub/CL_RecSys/data/"
     if args.data_name == 'lastfm':
@@ -205,7 +205,7 @@ if __name__ == '__main__':
     user_dict_cum_ext, item_dict_cum_ext = {}, {}
     user_emb_cum, item_emb_cum = None, None
 
-    for i in range(4):
+    for i in range(9):
         print("--------------------")
         print("Data Block:{}".format(i))
         # update appeared nodes for Train. all dict: {real_id: index}
