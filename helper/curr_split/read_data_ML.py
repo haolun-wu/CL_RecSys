@@ -8,8 +8,9 @@ import pickle as pkl
 import pandas as pd
 import torch
 from copy import deepcopy
+import time
 
-[sys.path.append(i) for i in ['.', '..']]
+# [sys.path.append(i) for i in ['.', '..']]
 import numpy as np
 from sklearn.model_selection import train_test_split
 from scipy.sparse import csr_matrix
@@ -49,6 +50,8 @@ class ml1m(DatasetLoader):
                          sep='::',
                          engine='python',
                          names=['user', 'item', 'rate', 'time'])
+        # https://stackoverflow.com/questions/70149227/split-movielen-100k-dataset-based-on-timestamp
+        df['real-time'] = df['time'].apply(lambda x: time.localtime(x)).apply(lambda x: time.strftime("%Y-%m", x))
         df = df.dropna(axis=0, how='any')
         df = df[df['rate'] > 3]
         df = df.drop_duplicates()
@@ -58,15 +61,24 @@ class ml1m(DatasetLoader):
 
 
 class Data(object):
-    def __init__(self, data_dir, val_ratio=None, test_ratio=0.2, user_filter=5, item_filter=5, seed=0):
-        data_name = 'ml-1m'
+    def __init__(self, data_dir, data_name='ml-1m', val_ratio=None, test_ratio=0.2, user_filter=5, item_filter=5,
+                 exact_time=True, seed=0):
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
         self.user_filter = user_filter
         self.item_filter = item_filter
         origin_data_path = os.path.join(data_dir, "{}/ratings.dat".format(data_name))
         pro_data_path = os.path.join(data_dir, "preprocessed/{}/overall.csv".format(data_name))
-        pro_data_block_path = os.path.join(data_dir, "preprocessed/{}/data_0.csv".format(data_name))
+        if exact_time:
+            pro_data_block_path = os.path.join(data_dir, "preprocessed/{}/data_t0.csv".format(data_name))
+        else:
+            pro_data_block_path = os.path.join(data_dir, "preprocessed/{}/data_0.csv".format(data_name))
+
+        # df = ml1m(origin_data_path).load()
+        # df = df.sort_values(by=['real-time'])
+        # print("df:", df)
+        #
+        # sys.exit()
 
         if not os.path.exists(pro_data_path):
             df = ml1m(origin_data_path).load()
@@ -89,42 +101,78 @@ class Data(object):
             print('all_user:{}, all_item:{}, all_interac:{}'.format(self.num_user, self.num_item, self.num_interac))
         else:
             df = pandas.read_csv(pro_data_path)
-            print('all_user:{}, all_item:{}, all_interac:{}'.format(6038, 3533, 575281))
+            if data_name == 'ml-1m':
+                statistics = [6038, 3533, 575281]
+            elif data_name == 'ml-10m':
+                statistics = [69816, 10472, 5885448]
+            print('all_user:{}, all_item:{}, all_interac:{}'.format(statistics[0], statistics[1], statistics[2]))
+
+        if exact_time:
+            data_full = self.preprocess_data_exact_time(df, data_name, pro_data_block_path)
+        else:
+            data_full = self.preprocess_data_not_exact_time(df, data_name, pro_data_block_path)
+
+        self.data_full_dict = {}
+        length = len(data_full)
+        for i in range(length):
+            self.data_full_dict[i] = self.preprocess_data_block(data_full[i], time_block=i)
+
+        for i in range(1, length):
+            user_prev = list(self.data_full_dict[i - 1][0].keys())
+            user_now = list(self.data_full_dict[i][0].keys())
+            print("block {}-{}, #common users:{}".format(i - 1, i, len(list(set(user_prev) & set(user_now)))))
+
+    def preprocess_data_exact_time(self, df, data_name, pro_data_block_path):
 
         if not os.path.exists(pro_data_block_path):
-            num_interact = 575281
+            data_full = []
+            time_split = ['2000-04', '2001-01', '2001-04', '2001-07', '2001-10',
+                          '2002-01', '2002-04', '2002-07', '2002-10', '2003-01']
+
+            # data_t0 = df[df['real-time'] < time_split[0]]
+            # print("data_t0:", data_t0)
+
+            for i in range(9):
+                tmp = df[time_split[i] <= df['real-time']]
+                tmp = tmp[tmp['real-time'] < time_split[i + 1]].reset_index().drop(['index'], axis=1)
+                # print("block:{}, len:{}".format(i, len(tmp)))
+                tmp.to_csv(os.path.join(data_dir, "preprocessed/{}/data_t{}.csv".format(data_name, i)))
+
+            # data_t0 = df.loc[0:int(num_interact * 0.6)].reset_index().drop(['index'], axis=1)
+            # data_1 = df.loc[int(num_interact * 0.6):int(num_interact * 0.7)].reset_index().drop(['index'], axis=1)
+            # data_2 = df.loc[int(num_interact * 0.7):int(num_interact * 0.8)].reset_index().drop(['index'], axis=1)
+            # data_3 = df.loc[int(num_interact * 0.8):int(num_interact * 0.9)].reset_index().drop(['index'], axis=1)
+            # data_4 = df.loc[int(num_interact * 0.9):].reset_index().drop(['index'], axis=1)
+            # data_full = [data_0, data_1, data_2, data_3, data_4]
+            # for i in range(5):
+            #     data_full[i].to_csv(os.path.join(data_dir, "preprocessed/{}/data_{}.csv".format(data_name, i)))
+        else:
+            data_full = []
+            for i in range(9):
+                data_full.append(
+                    pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_t{}.csv".format(data_name, i))))
+
+        return data_full
+
+    def preprocess_data_not_exact_time(self, df, data_name, pro_data_block_path):
+        if not os.path.exists(pro_data_block_path):
+            if data_name == 'ml-1m':
+                num_interact = 575281
             data_0 = df.loc[0:int(num_interact * 0.6)].reset_index().drop(['index'], axis=1)
             data_1 = df.loc[int(num_interact * 0.6):int(num_interact * 0.7)].reset_index().drop(['index'], axis=1)
             data_2 = df.loc[int(num_interact * 0.7):int(num_interact * 0.8)].reset_index().drop(['index'], axis=1)
             data_3 = df.loc[int(num_interact * 0.8):int(num_interact * 0.9)].reset_index().drop(['index'], axis=1)
             data_4 = df.loc[int(num_interact * 0.9):].reset_index().drop(['index'], axis=1)
-            data_0.to_csv(os.path.join(data_dir, "preprocessed/{}/data_0.csv".format(data_name)))
-            data_1.to_csv(os.path.join(data_dir, "preprocessed/{}/data_1.csv".format(data_name)))
-            data_2.to_csv(os.path.join(data_dir, "preprocessed/{}/data_2.csv".format(data_name)))
-            data_3.to_csv(os.path.join(data_dir, "preprocessed/{}/data_3.csv".format(data_name)))
-            data_4.to_csv(os.path.join(data_dir, "preprocessed/{}/data_4.csv".format(data_name)))
+            data_full = [data_0, data_1, data_2, data_3, data_4]
+            for i in range(5):
+                data_full[i].to_csv(os.path.join(data_dir, "preprocessed/{}/data_{}.csv".format(data_name, i)))
         else:
-            data_0 = pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_0.csv".format(data_name)))
-            data_1 = pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_1.csv".format(data_name)))
-            data_2 = pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_2.csv".format(data_name)))
-            data_3 = pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_3.csv".format(data_name)))
-            data_4 = pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_4.csv".format(data_name)))
+            data_full = []
+            for i in range(5):
+                data_full.append(
+                    pandas.read_csv(os.path.join(data_dir, "preprocessed/{}/data_{}.csv".format(data_name, i))))
 
-        data_full = [data_0, data_1, data_2, data_3, data_4]
-
-        self.data_full_dict = {}
-        for i in range(len(data_full)):
-            self.data_full_dict[i] = self.preprocess_data_block(data_full[i], time_block=i)
-
-        user0 = list(self.data_full_dict[0][0].keys())
-        user1 = list(self.data_full_dict[1][0].keys())
-        user2 = list(self.data_full_dict[2][0].keys())
-        user3 = list(self.data_full_dict[3][0].keys())
-        user4 = list(self.data_full_dict[4][0].keys())
-        print("common:", len(list(set(user0) & set(user1))))
-        print("common:", len(list(set(user1) & set(user2))))
-        print("common:", len(list(set(user2) & set(user3))))
-        print("common:", len(list(set(user3) & set(user4))))
+        return data_full
 
     def preprocess_data_block(self, data_block, time_block):
         data_block = data_block[["user", "item", "rate"]].drop_duplicates()
@@ -151,25 +199,13 @@ class Data(object):
 
         all_set = [i + j for i, j in zip(train_set, test_set)]
 
-        print("# train:{}, # val:{}, # test:{}".format(np.sum([len(x) for x in train_set]),
-                                                       np.sum([len(x) for x in val_set]),
-                                                       np.sum([len(x) for x in test_set])))
-        density = float(
-            np.sum([len(x) for x in train_set]) + np.sum([len(x) for x in val_set]) + np.sum(
-                [len(x) for x in test_set])) / num_user / num_item
-        print("density:{:.2%}".format(density))
-        #
-        # avg_deg = np.sum([len(x) for x in self.train_set_UI]) / self.num_user
-        # avg_deg *= 1 / (1 - test_ratio)
-        # print('Avg. degree U-I graph: ', avg_deg)
-        # self.user_dict.append(user_dict)
-        # self.item_dict.append(item_dict)
-        # self.train_matrix.append(train_matrix)
-        # self.test_matrix.append(test_matrix)
-        # self.val_matrix.append(val_matrix)
-        # self.train_set.append(train_set)
-        # self.test_set.append(test_set)
-        # self.val_set.append(val_set)
+        # print("# train:{}, # val:{}, # test:{}".format(np.sum([len(x) for x in train_set]),
+        #                                                np.sum([len(x) for x in val_set]),
+        #                                                np.sum([len(x) for x in test_set])))
+        # density = float(
+        #     np.sum([len(x) for x in train_set]) + np.sum([len(x) for x in val_set]) + np.sum(
+        #         [len(x) for x in test_set])) / num_user / num_item
+        # print("density:{:.2%}".format(density))
 
         return user_dict, item_dict, train_matrix, test_matrix, train_set, test_set, all_set
 
@@ -322,16 +358,19 @@ class Data(object):
 
 def parser_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--data_name', type=str, default='ml-10m')
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--test_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
     parser.add_argument('--item_filter', type=int, default=5)
+    parser.add_argument('--exact_time', type=bool, default=True)
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     parser = parser_args()
-    # data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
-    data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
-    data_generator = Data(data_dir, test_ratio=parser.test_ratio, val_ratio=parser.val_ratio,
-                          user_filter=parser.user_filter, item_filter=parser.item_filter)
+    data_dir = "/Users/haolunwu/Research_project/CL_RecSys/data/"
+    # data_dir = "/data/"
+    data_generator = Data(data_dir, data_name=parser.data_name, test_ratio=parser.test_ratio,
+                          val_ratio=parser.val_ratio,
+                          user_filter=parser.user_filter, item_filter=parser.item_filter, exact_time=parser.exact_time)
