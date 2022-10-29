@@ -13,7 +13,7 @@ import pickle
 from helper.sampler import NegSampler
 from helper.utils import neg_item_pre_sampling, generate_pred_list, compute_metrics, dict_extend, \
     separete_intersect_dicts, update_emb_table, EarlyStopping
-from helper.curr_split import read_data_LF, read_data_ML
+from helper import read_data_ML, read_data_LF
 from helper.eval_metrics import recall_at_k_list
 from argparse import ArgumentParser
 from model.MF_time import MatrixFactorization
@@ -48,13 +48,13 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
     parser.add_argument('--wd', type=float, default=1e-3, help="Weight decay factor")
     # Training
-    parser.add_argument('--n_epochs', type=int, default=100, help="Number of epoch during training")
-    parser.add_argument('--every', type=int, default=5,
+    parser.add_argument('--n_epochs', type=int, default=1000, help="Number of epoch during training")
+    parser.add_argument('--every', type=int, default=10,
                         help="Period for evaluating precision and recall during training")
     parser.add_argument('--patience', type=int, default=5, help="patience")
-    parser.add_argument('--batch_size', type=int, default=256, help="batch_size")
+    parser.add_argument('--batch_size', type=int, default=512, help="batch_size")
     parser.add_argument('--topk', type=int, default=20, help="topk")
-    parser.add_argument('--sample_every', type=int, default=10, help="sample frequency")
+    parser.add_argument('--sample_every', type=int, default=50, help="sample frequency")
 
     return parser.parse_args()
 
@@ -76,8 +76,8 @@ def train_model_block(args, time_block=0):
     sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg, n_workers=4)
     num_batches = train_matrix.count_nonzero() // args.batch_size
 
-    saved_model_path = './saved/{}/model/curr/state-{}.pt'.format(args.data_name, args.strategy)
-    saved_result_path = './saved/{}/result/curr/'.format(args.data_name)
+    saved_model_path = './saved/{}/model/state-{}.pt'.format(args.data_name, args.strategy)
+    saved_result_path = './saved/{}/result/'.format(args.data_name)
     early_stopping = EarlyStopping(patience=args.patience, verbose=True, path=saved_model_path)
 
     try:
@@ -119,7 +119,7 @@ def train_model_block(args, time_block=0):
             if iter % args.every == 0:
                 logger.info('Avg BPR loss:{:.6f}'.format(loss / num_batches))
                 logger.info('Avg aux loss:{:.6f}'.format(aux_loss / num_batches))
-                # logger.info("Epochs:{}".format(iter))
+                logger.info("Epochs:{}".format(iter))
                 model.eval()
                 pred_list = generate_pred_list(model, train_matrix, device=args.device, topk=20)
                 # if time_block > 0:
@@ -162,7 +162,7 @@ def train_model_block(args, time_block=0):
     keys = list(user_common_next_id.keys())
     values = recall_at_k_list(test_set, pred_list, topk=20)
     individual_recall = {k: v for k, v in zip(keys, values)}
-    with open('./saved/{}/result/curr/recall-{}-block-{}.pkl'.format(args.data_name, args.strategy, i), 'wb') as f:
+    with open(os.path.join(saved_result_path, 'recall-{}-block-{}.pkl'.format(args.strategy, i), 'wb')) as f:
         pickle.dump(individual_recall, f)
 
     # with open('saved_dictionary.pkl', 'rb') as f:
@@ -190,8 +190,6 @@ if __name__ == '__main__':
 
     print("Data name:", args.data_name)
     data_dir = "./data/"
-    # data_dir = "C:/Users/eq22858/Documents/GitHub/CL_RecSys/data/"
-    # data_dir = "C:/Users/31093/Documents/GitHub/CL_RecSys/data/"
     if args.data_name == 'lastfm':
         data_generator = read_data_LF.Data(data_dir, test_ratio=args.test_ratio,
                                            val_ratio=args.val_ratio, user_filter=args.user_filter,
@@ -201,21 +199,40 @@ if __name__ == '__main__':
                                            val_ratio=args.val_ratio, user_filter=args.user_filter,
                                            item_filter=args.item_filter, exact_time=True, seed=args.seed)
     # record appeared nodes
-    user_dict_cum_prev, item_dict_cum_prev = {}, {}
-    user_dict_cum_ext, item_dict_cum_ext = {}, {}
+    user_dict_cum_prev, item_dict_cum_prev = {}, {}  # does not contain user_dict in this block
+    user_dict_cum_curr, item_dict_cum_curr = {}, {}  # contain the user_dict in this block
     user_emb_cum, item_emb_cum = None, None
+    """
+    user_dict_cum_prev: dictionary. contain cum {real_id:id} before current block user_dict
+    user_dict_cum_curr: dictionary. contain cum {real_id:id} including current block user_dict
+    (new nodes 拼在最后，id继续连续)
+    user_dict_inter_prev: {intersection of [user_dict_cum_prev, user_dict]: id in user_dict_cum_prev}
+    user_dict_inter: {intersection of [user_dict_cum_prev, user_dict]: id in user_dict}
+    user_dict_rest: {new nodes in user_dict: id in user_dict}
+    emb_curr, emb_cum: embedding table
+    """
 
-    for i in range(9):
+    for i in range(8):
         print("--------------------")
         print("Data Block:{}".format(i))
         # update appeared nodes for Train. all dict: {real_id: index}
-        user_dict_cum_prev, item_dict_cum_prev = user_dict_cum_ext, item_dict_cum_ext
+        user_dict_cum_prev, item_dict_cum_prev = user_dict_cum_curr, item_dict_cum_curr
         user_dict, item_dict = data_generator.data_full_dict[i][0], data_generator.data_full_dict[i][1]
-        user_dict_cum_ext = dict_extend(user_dict_cum_ext, user_dict) if user_dict_cum_ext != {} else user_dict
-        item_dict_cum_ext = dict_extend(item_dict_cum_ext, item_dict) if item_dict_cum_ext != {} else item_dict
-        # return the {real_index:id} for intersection users in exsiting cumu and current block ---> for replacement
+        if user_dict_cum_prev == {}:
+            user_dict_cum_curr, new_user = user_dict, list(user_dict.keys())
+            item_dict_cum_curr, new_item = item_dict, list(item_dict.keys())
+        else:
+            user_dict_cum_curr, new_user = dict_extend(user_dict_cum_curr, user_dict)[0], \
+                                           dict_extend(user_dict_cum_curr, user_dict)[1]
+            item_dict_cum_curr, new_item = dict_extend(item_dict_cum_curr, item_dict)[0], \
+                                           dict_extend(item_dict_cum_curr, item_dict)[1]
+        # return the {real_index:id} for intersection users in exsiting cum and current block ---> for replacement
         user_dict_inter_prev, user_dict_inter, user_dict_rest = separete_intersect_dicts(user_dict_cum_prev, user_dict)
         item_dict_inter_prev, item_dict_inter, item_dict_rest = separete_intersect_dicts(item_dict_cum_prev, item_dict)
+
+        # make sure the newly added nodes are correct
+        assert list(user_dict_cum_curr.keys())[-len(new_user):] == list(user_dict_rest.keys())
+        assert len(user_dict_cum_curr) - len(user_dict_cum_prev) == len(new_user) == len(list(user_dict_rest.keys()))
 
         # current block: train+val, next block: test
         train_matrix = data_generator.data_full_dict[i][2]
@@ -241,6 +258,7 @@ if __name__ == '__main__':
         test_set, val_set = np.array(test_set, dtype=list), np.array(val_set, dtype=list)
         user_size, item_size = train_matrix.shape[0], train_matrix.shape[1]
         print("user_size:{}, item_size:{}".format(user_size, item_size))
+        print("new_user:{}, new_item:{}".format(len(new_user), len(new_item)))
         print("common users for test:{}".format(len(test_set)))
 
         # Train model and update embedding table
@@ -250,7 +268,7 @@ if __name__ == '__main__':
         item_emb_cum = update_emb_table(item_emb_cum, item_emb_curr, item_dict_inter_prev, item_dict_inter,
                                         item_dict_rest)
 
-        print("user_emb_curr:", user_emb_curr.shape)
-        print("item_emb_curr:", item_emb_curr.shape)
+        # print("user_emb_curr:", user_emb_curr.shape)
+        # print("item_emb_curr:", item_emb_curr.shape)
         print("user_emb_cum:", user_emb_cum.shape)
         print("item_emb_cum:", item_emb_cum.shape)

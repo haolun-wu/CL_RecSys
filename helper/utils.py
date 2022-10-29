@@ -69,13 +69,15 @@ def compute_metrics(test_set, pred_list, topk=20):
 
 
 def dict_extend(dict1, dict2):  # extend the original dict with new real_ids
+    new_node = []
     merged_dict = dict1.copy()
-    index = list(dict1.values())[-1]
+    index = list(dict1.values())[-1] + 1
     for key, values in dict2.items():
         if key not in dict1:
-            merged_dict[key] = index + 1
+            merged_dict[key] = index
+            new_node.append(key)
             index += 1
-    return merged_dict
+    return merged_dict, new_node
 
 
 def separete_intersect_dicts(dict1, dict2):
@@ -178,4 +180,8 @@ if __name__ == '__main__':
     B = np.array([3, 21, 6])
 
     print(index_B_in_A(A, B))
-    print(select_by_order(A, B))
+    # print(select_by_order(A, B))
+
+    # dict1 = {23: 0, 24: 1, 78: 2, 81: 3}
+    # dict2 = {27: 0, 91: 3}
+    # print(dict_extend(dict1, dict2))

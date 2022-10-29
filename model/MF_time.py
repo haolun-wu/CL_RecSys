@@ -63,8 +63,9 @@ class MatrixFactorization(nn.Module):
             position_in_all = index_B_in_A(np.array(list(dict_inter.values())), common_values)
             position_in_batch = index_B_in_A(np.array(list(set(index_list))), common_values)
 
-            common_keys = np.array(list(dict_inter.keys()))[position_in_all]
-            common_values_prev = np.array([dict_inter_prev[x] for x in common_keys])
+            common_keys = np.array(list(dict_inter.keys()))[position_in_all]  # find the key (real id)
+            common_values_prev = np.array(
+                [dict_inter_prev[x] for x in common_keys])  # find the corresponding id in prev recorded cum
 
             distill_loss = emb_curr[position_in_batch] - emb_cum[common_values_prev]
             distill_loss = torch.sqrt(torch.square(distill_loss).sum())
