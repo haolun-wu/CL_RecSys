@@ -28,14 +28,14 @@ torch.backends.cudnn.benchmark = True
 
 def parse_args():
     parser = ArgumentParser(description="MF")
-    parser.add_argument("--data_name", type=str, default="ml-1m")
+    parser.add_argument("--data_name", type=str, default="ml-10m")
     parser.add_argument('--test_ratio', type=float, default=0.1)
     parser.add_argument('--val_ratio', type=float, default=0.1)
     parser.add_argument('--user_filter', type=int, default=5)
     parser.add_argument('--item_filter', type=int, default=5)
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--is_logging', type=bool, default=False)
-    parser.add_argument('--strategy', type=str, default='self-emb', choices=['pure', 'self-emb', 'ewc', 'ader'])
+    parser.add_argument('--strategy', type=str, default='self-emb', choices=['tune', 'self-emb', 'ewc', 'ader'])
     # self-emb
     parser.add_argument('--scaling_self_emb', type=float, default=20.0)
     # neighborhood to use
@@ -76,8 +76,8 @@ def train_model_block(args, time_block=0):
     sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg, n_workers=4)
     num_batches = train_matrix.count_nonzero() // args.batch_size
 
-    saved_model_path = './saved/{}/model/state-{}.pt'.format(args.data_name, args.strategy)
-    saved_result_path = './saved/{}/result/'.format(args.data_name)
+    saved_model_path = './saved/{}/model/state-{}-{}.pt'.format(args.data_name, str(time_block), args.strategy)
+    # saved_result_path = './saved/{}/result/'.format(args.data_name)
     early_stopping = EarlyStopping(patience=args.patience, verbose=True, path=saved_model_path)
 
     try:
@@ -94,7 +94,7 @@ def train_model_block(args, time_block=0):
                 batch_user_id, batch_item_id, neg_samples = sampler.next_batch()
                 user, pos, neg = batch_user_id, batch_item_id, np.squeeze(neg_samples)
 
-                if args.strategy == 'pure':
+                if args.strategy == 'tune':
                     train_loss = model(user, pos, neg)
                     batch_loss = train_loss
                 elif args.strategy == 'self-emb':
@@ -127,6 +127,8 @@ def train_model_block(args, time_block=0):
 
                 # logger.info("validation")
                 precision, recall, MAP, ndcg = compute_metrics(val_set, pred_list, topk=20)
+                # logger.info(', '.join(str(e) for e in recall))
+                # logger.info(', '.join(str(e) for e in ndcg))
 
                 # early_stopping
                 early_stopping(recall[-1], model)
@@ -147,21 +149,21 @@ def train_model_block(args, time_block=0):
         sampler.close()
         sys.exit()
 
-    model.load_state_dict(torch.load(saved_model_path))
-    print("Test Item recommendation:")
-    pred_list = generate_pred_list(model, train_matrix, device=args.device, topk=20)
-    # if time_block > 0:
-    pred_list = [pred_list[i] for i in list(user_common_curr_id.values())]
-    precision, recall, MAP, ndcg = compute_metrics(test_set, pred_list, topk=20)
-    logger.info(', '.join(str(e) for e in recall))
-    logger.info(', '.join(str(e) for e in ndcg))
-
-    # save individual recall
-    keys = list(user_common_next_id.keys())
-    values = recall_at_k_list(test_set, pred_list, topk=20)
-    individual_recall = {k: v for k, v in zip(keys, values)}
-    with open(os.path.join(saved_result_path, 'recall-{}-block-{}.pkl'.format(args.strategy, i), 'wb')) as f:
-        pickle.dump(individual_recall, f)
+    # model.load_state_dict(torch.load(saved_model_path))
+    # print("Test Item recommendation:")
+    # pred_list = generate_pred_list(model, train_matrix, device=args.device, topk=20)
+    # # if time_block > 0:
+    # pred_list = [pred_list[i] for i in list(user_common_curr_id.values())]
+    # precision, recall, MAP, ndcg = compute_metrics(test_set, pred_list, topk=20)
+    # logger.info(', '.join(str(e) for e in recall))
+    # logger.info(', '.join(str(e) for e in ndcg))
+    #
+    # # save individual recall
+    # keys = list(user_common_next_id.keys())
+    # values = recall_at_k_list(test_set, pred_list, topk=20)
+    # individual_recall = {k: v for k, v in zip(keys, values)}
+    # with open(os.path.join(saved_result_path, 'recall-{}-block-{}.pkl'.format(args.strategy, i), 'wb')) as f:
+    #     pickle.dump(individual_recall, f)
 
     # with open('saved_dictionary.pkl', 'rb') as f:
     #     loaded_dict = pickle.load(f)
@@ -213,7 +215,7 @@ if __name__ == '__main__':
     for i in range(8):
         print("--------------------")
         print("Data Block:{}".format(i))
-        # update appeared nodes for Train. all dict: {real_id: index}
+        """update appeared nodes for Train. all dict: {real_id: index}"""
         user_dict_cum_prev, item_dict_cum_prev = user_dict_cum_curr, item_dict_cum_curr
         user_dict, item_dict = data_generator.data_full_dict[i][0], data_generator.data_full_dict[i][1]
         if user_dict_cum_prev == {}:
@@ -224,42 +226,44 @@ if __name__ == '__main__':
                                            dict_extend(user_dict_cum_curr, user_dict)[1]
             item_dict_cum_curr, new_item = dict_extend(item_dict_cum_curr, item_dict)[0], \
                                            dict_extend(item_dict_cum_curr, item_dict)[1]
-        # return the {real_index:id} for intersection users in exsiting cum and current block ---> for replacement
+        """return the {real_index:id} for intersection users in exsiting cum and current block ---> for replacement"""
         user_dict_inter_prev, user_dict_inter, user_dict_rest = separete_intersect_dicts(user_dict_cum_prev, user_dict)
         item_dict_inter_prev, item_dict_inter, item_dict_rest = separete_intersect_dicts(item_dict_cum_prev, item_dict)
 
-        # make sure the newly added nodes are correct
+        """make sure the newly added nodes are correct"""
         assert list(user_dict_cum_curr.keys())[-len(new_user):] == list(user_dict_rest.keys())
         assert len(user_dict_cum_curr) - len(user_dict_cum_prev) == len(new_user) == len(list(user_dict_rest.keys()))
 
-        # current block: train+val, next block: test
+        """current block: train+val"""
         train_matrix = data_generator.data_full_dict[i][2]
-        test_set = data_generator.data_full_dict[i + 1][6]
         val_set = data_generator.data_full_dict[i][5]
+        # test_set = data_generator.data_full_dict[i + 1][6]
 
-        # only use the test_set and val_set on those users in train_matrix
-        user_dict_curr = data_generator.data_full_dict[i][0]
-        user_dict_next = data_generator.data_full_dict[i + 1][0]
-
-        user_common_curr_id = {}  # common users, the id in the curr block
-        user_common_next_id = {}  # common users, the id in the next block
-        for key, values in user_dict_next.items():
-            if key in user_dict_curr:
-                user_common_curr_id[key] = user_dict_curr[key]
-                user_common_next_id[key] = values
-        test_set = [test_set[i] for i in list(user_common_next_id.values())]
-        val_set = [val_set[i] for i in list(user_common_curr_id.values())]
+        # """only use the test_set and val_set on those users in train_matrix"""
+        # user_dict_curr = data_generator.data_full_dict[i][0]
+        # user_dict_next = data_generator.data_full_dict[i + 1][0]
+        #
+        # user_common_curr_id = {}  # common users, the id in the curr block
+        # user_common_next_id = {}  # common users, the id in the next block
+        # for key, values in user_dict_next.items():
+        #     if key in user_dict_curr:
+        #         user_common_curr_id[key] = user_dict_curr[key]
+        #         user_common_next_id[key] = values
+        # val_set = [val_set[i] for i in list(user_common_curr_id.values())]
+        # test_set = [test_set[i] for i in list(user_common_next_id.values())]
 
         # print("user_common_curr_id:", list(user_common_curr_id.keys()))
         # print("user_common_next_id:", list(user_common_next_id.keys()))
 
-        test_set, val_set = np.array(test_set, dtype=list), np.array(val_set, dtype=list)
+        val_set = np.array(val_set, dtype=list)
+        # test_set = np.array(test_set, dtype=list)
+
         user_size, item_size = train_matrix.shape[0], train_matrix.shape[1]
         print("user_size:{}, item_size:{}".format(user_size, item_size))
         print("new_user:{}, new_item:{}".format(len(new_user), len(new_item)))
-        print("common users for test:{}".format(len(test_set)))
+        # print("common users for test:{}".format(len(test_set)))
 
-        # Train model and update embedding table
+        """Train model and update embedding table"""
         user_emb_curr, item_emb_curr = train_model_block(args, time_block=i)
         user_emb_cum = update_emb_table(user_emb_cum, user_emb_curr, user_dict_inter_prev, user_dict_inter,
                                         user_dict_rest)
@@ -270,3 +274,23 @@ if __name__ == '__main__':
         # print("item_emb_curr:", item_emb_curr.shape)
         print("user_emb_cum:", user_emb_cum.shape)
         print("item_emb_cum:", item_emb_cum.shape)
+
+        """save embedding and real_id:id for users and items"""
+        print("saving emb and {real_id:id}...")
+        torch.save(user_emb_cum,
+                   './saved/{}/emb/user-emb-{}-{}.pt'.format(args.data_name, str(time_block), args.strategy))
+        torch.save(item_emb_cum,
+                   './saved/{}/emb/item-emb-{}-{}.pt'.format(args.data_name, str(time_block), args.strategy))
+
+        # """Save dict"""
+        # import pickle
+        #
+        # with open('./saved/{}/dict/user-cum-dict-{}.pickle'.format(args.data_name, str(i)), "wb") as file:
+        #     pickle.dump(user_dict_cum_curr, file, protocol=pickle.HIGHEST_PROTOCOL)
+        #
+        # with open('./saved/{}/dict/item-cum-dict-{}.pickle'.format(args.data_name, str(i)), "wb") as file:
+        #     pickle.dump(item_dict_cum_curr, file, protocol=pickle.HIGHEST_PROTOCOL)
+        # # with open('./saved/{}/dict/user-cum-dict-{}.pickle'.format(args.data_name, str(i)), 'rb') as handle:
+        # #     user_data = pickle.load(handle)
+        # # with open('./saved/{}/dict/item-cum-dict-{}.pickle'.format(args.data_name, str(i)), 'rb') as handle:
+        # #     item_data = pickle.load(handle)
